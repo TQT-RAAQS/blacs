@@ -1,6 +1,6 @@
 #####################################################################
 #                                                                   #
-# /experiment_queue.py                                                         #
+# /experiment_queue.py                                              #
 #                                                                   #
 # Copyright 2013, Monash University                                 #
 #                                                                   #
@@ -15,7 +15,6 @@ import logging
 import os
 import threading
 import time
-import datetime
 import sys
 import shutil
 from collections import defaultdict
@@ -125,6 +124,7 @@ class QueueManager(object):
         
         # set up buttons
         self._ui.queue_pause_button.toggled.connect(self._toggle_pause)
+        self._ui.queue_idle_button.toggled.connect(self._toggle_idle)
         self._ui.queue_repeat_button.toggled.connect(self._toggle_repeat)
         self._ui.queue_delete_button.clicked.connect(self._delete_selected_items)
         self._ui.queue_clear_button.clicked.connect(self._toggle_clear)
@@ -205,6 +205,9 @@ class QueueManager(object):
         
     def _toggle_pause(self,checked):    
         self.manager_paused = checked
+
+    def _toggle_idle(self,checked):
+        print("!*", checked, self.current_queue)
 
     def _toggle_clear(self):
         self._model.clear()
@@ -723,7 +726,7 @@ class QueueManager(object):
                 # A Queue for event-based notification of when the experiment has finished.
                 experiment_finished_queue = queue.Queue()
                 logger.debug('About to start the master pseudoclock')
-                run_time = datetime.datetime.now()
+                run_time = time.localtime()
 
                 ##########################################################################################################################################
                 #                                                        Plugin callbacks                                                                #
@@ -851,7 +854,7 @@ class QueueManager(object):
 
                     data_group = hdf5_file['/'].create_group('data')
                     # stamp with the run time of the experiment
-                    hdf5_file.attrs['run time'] = run_time.strftime('%Y%m%dT%H%M%S.%f')
+                    hdf5_file.attrs['run time'] = time.strftime('%Y%m%dT%H%M%S',run_time)
         
                 error_condition = False
                 response_list = {}

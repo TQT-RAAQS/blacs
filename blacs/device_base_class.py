@@ -196,15 +196,22 @@ class DeviceTab(Tab):
         
         # Get the calibration details
         calib_class = None
+        limits = None
         calib_params = {}
         if device:
             # get the AO from the connection table, find its calibration details
             calib_class = device.unit_conversion_class if device.unit_conversion_class != "None" else None
             calib_params = device.unit_conversion_params
+            limits = device.properties['limits']
         
         # Instantiate the AO object
+        if limits is None:
+           limits = [properties['min'],properties['max']]
+
         return AO(BLACS_hardware_name, connection_name, self.device_name, self.program_device, self.settings, calib_class, calib_params,
-                properties['base_unit'], properties['min'], properties['max'], properties['step'], properties['decimals'])
+               properties['base_unit'], limits[0], limits[1], properties['step'], properties['decimals'])
+        #return AO(BLACS_hardware_name, connection_name, self.device_name, self.program_device, self.settings, calib_class, calib_params,
+        #        properties['base_unit'], properties['min'], properties['max'], properties['step'], properties['decimals'])
             
     def create_dds_outputs(self,dds_properties):
         for hardware_name,properties in dds_properties.items():
