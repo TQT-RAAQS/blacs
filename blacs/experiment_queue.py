@@ -36,8 +36,18 @@ from labscript_utils.qtwidgets.elide_label import elide_label
 from labscript_utils.connections import ConnectionTable
 import labscript_utils.properties
 
-from blacs.tab_base_classes import MODE_MANUAL, MODE_TRANSITION_TO_BUFFERED, MODE_TRANSITION_TO_MANUAL, MODE_BUFFERED  
+from blacs.tab_base_classes import MODE_MANUAL, MODE_TRANSITION_TO_BUFFERED, MODE_TRANSITION_TO_MANUAL, MODE_BUFFERED
 import blacs.plugins as plugins
+
+from labscript_utils.timer import Timer
+from labscript_utils.flags import (\
+    FLAG_SAVE_FRONT_PANEL_TO_SHOT, FLAG_EFFICIENT_PRAWN_TRANSITION_TO_MANUL, PRAWN_NAME,
+    FLAG_EFFICIENT_EMCCD, EMCCD_NAME, FLAG_ASYNCHRONOUS_EMCCD,
+    FLAG_EMCCD_ISS_EFFICIENT, EMCCD_ISS_NAME, FLAG_ASYNCHRONOUS_EMCCD_ISS
+)
+
+from experiment.modules.emccd_server_client import *
+from experiment.modules.emccd_server_client.emccd_fgc_client import EmccdFGCClient
 
 
 def tempfilename(prefix='BLACS-temp-', suffix='.h5'):
@@ -156,6 +166,44 @@ class QueueManager(object):
         # The button already has an arrow indicating a menu, don't draw another one:
         self._ui.repeat_mode_select_button.setStyleSheet("QToolButton::menu-indicator{width: 0;}")
 
+        if FLAG_EFFICIENT_EMCCD:
+            self.emccd_client = EmccdServerClient()
+            self._emccd_socket_lock = threading.Lock()
+
+            def emccd_ttm():
+                with self._emccd_socket_lock:
+                    self.emccd_client.socket.send_string("done")
+                    self.emccd_client.socket.recv()
+                    self.emccd_client.socket.send_string("")
+                    self.emccd_client.socket.recv()
+
+                return True
+            
+            def emccd_ttm_async():
+                threading.Thread(target=emccd_ttm, name="EMCCD-ttm", daemon=True).start()
+                return True
+
+            self.emccd_transition_to_manual_operator = emccd_ttm_async if FLAG_ASYNCHRONOUS_EMCCD else emccd_ttm
+
+        if FLAG_EMCCD_ISS_EFFICIENT:
+            self.emccd_iss_client = EmccdFGCClient()
+            self._emccd_iss_socket_lock = threading.Lock()
+
+            def emccd_iss_ttm():
+                with self._emccd_iss_socket_lock:
+                    self.emccd_iss_client.socket.send_string("done")
+                    self.emccd_iss_client.socket.recv()
+                    self.emccd_iss_client.socket.send_string("")
+                    self.emccd_iss_client.socket.recv()
+
+                return True
+            
+            def emccd_iss_ttm_async():
+                threading.Thread(target=emccd_iss_ttm, name="EMCCD-iss-ttm", daemon=True).start()
+                return True
+
+            self.emccd_iss_transition_to_manual_operator = emccd_iss_ttm_async if FLAG_ASYNCHRONOUS_EMCCD_ISS else emccd_iss_ttm
+
         self.manager = threading.Thread(target = self.manage)
         self.manager.daemon=True
         self.manager.start()
@@ -207,7 +255,7 @@ class QueueManager(object):
         self.manager_paused = checked
 
     def _toggle_idle(self,checked):
-        print("!*", checked, self.current_queue)
+        return
 
     def _toggle_clear(self):
         self._model.clear()
@@ -534,7 +582,10 @@ class QueueManager(object):
                 time.sleep(1)
                 continue
             
+            Timer.register_absolute_time("manage_starts")
+            
             # Get the top file
+            Timer.start_timer("acquiring_shot_path")
             try:
                 path = self.get_next_file()
                 self.set_status('Preparing shot...', path)
@@ -544,7 +595,8 @@ class QueueManager(object):
                 self.set_status("Idle")
                 time.sleep(1)
                 continue
-            
+            Timer.stop_timer("acquiring_shot_path")
+
             devices_in_use = {}
             transition_list = {}   
             self.current_queue = queue.Queue()
@@ -592,6 +644,8 @@ class QueueManager(object):
 
                 start_time = time.time()
                 
+                Timer.start_timer("reading_shot_file")
+                
                 with h5py.File(path, 'r') as hdf5_file:
                     devices_in_use = {}
                     start_order = {}
@@ -610,14 +664,19 @@ class QueueManager(object):
                 for name in devices_in_use:
                     start_groups[start_order[name]].add(name)
                     stop_groups[stop_order[name]].add(name)
+                
+                Timer.stop_timer("reading_shot_file")
 
+                Timer.start_timer("transition_to_buffered")
                 while (transition_list or start_groups) and not error_condition:
                     if not transition_list:
                         # Ready to transition the next group:
                         for name in start_groups.pop(min(start_groups)):
                             try:
                                 # Connect restart signal from tabs to current_queue and transition the device to buffered mode
-                                success = self.transition_device_to_buffered(name,transition_list,path,restart_function)
+                                Timer.start_timer(f"transition_to_buffered_{name}")
+                                success = self.transition_device_to_buffered(name,
+                                transition_list,path,restart_function)
                                 if not success:
                                     logger.error('%s has an error condition, aborting run' % name)
                                     error_condition = True
@@ -657,7 +716,8 @@ class QueueManager(object):
                             logger.error('%s has an error condition, aborting run' % device_name)
                             error_condition = True
                             break
-
+                        
+                        Timer.stop_timer(f"transition_to_buffered_{device_name}")
                         del transition_list[device_name]
                     except queue.Empty:
                         # It's been 2 seconds without a device finishing
@@ -712,7 +772,8 @@ class QueueManager(object):
                     
                     # Start a new iteration
                     continue
-                
+
+                Timer.stop_timer("transition_to_buffered")
             
             
                 ##########################################################################################################################################
@@ -720,7 +781,11 @@ class QueueManager(object):
                 ##########################################################################################################################################
             
                 # Get front panel data, but don't save it to the h5 file until the experiment ends:
-                states,tab_positions,window_data,plugin_data = self.BLACS.front_panel_settings.get_save_data()
+                if FLAG_SAVE_FRONT_PANEL_TO_SHOT:
+                    Timer.start_timer("get_front_panel_settings")
+                    states,tab_positions,window_data,plugin_data = self.BLACS.front_panel_settings.get_save_data()
+                    Timer.stop_timer("get_front_panel_settings")
+
                 self.set_status("Running (program time: %.3fs)..."%(time.time() - start_time), path)
                     
                 # A Queue for event-based notification of when the experiment has finished.
@@ -737,10 +802,12 @@ class QueueManager(object):
                     except Exception:
                         logger.exception("Plugin callback raised an exception")
 
+                Timer.start_timer("prawnblaster_start")
                 #TODO: fix potential race condition if BLACS is closing when this line executes?
                 self.BLACS.tablist[self.master_pseudoclock].start_run(experiment_finished_queue)
+                Timer.stop_timer("prawnblaster_start")
                 
-                                                
+                Timer.start_timer("running_shot")
                 # Wait for notification of the end of run:
                 abort = False
                 restarted = False
@@ -751,6 +818,7 @@ class QueueManager(object):
                     except queue.Empty:
                         pass
                     try:
+                        pass
                         # Poll self.current_queue for abort signal from button or device restart
                         device_name, result = self.current_queue.get_nowait()
                         if (device_name == 'Queue Manager' and result == 'abort'):
@@ -763,6 +831,8 @@ class QueueManager(object):
                                 restarted = True
                     except queue.Empty:
                         pass
+
+                Timer.stop_timer("running_shot")
                         
                 if abort or restarted:
                     for devicename, tab in devices_in_use.items():
@@ -848,13 +918,19 @@ class QueueManager(object):
             #                                                       Transition to manual                                                             #
             ##########################################################################################################################################
             # start new try/except block here                   
+            Timer.start_timer("transition_to_manual")
             try:
-                with h5py.File(path,'r+') as hdf5_file:
-                    self.BLACS.front_panel_settings.store_front_panel_in_h5(hdf5_file,states,tab_positions,window_data,plugin_data,save_conn_table=False, save_queue_data=False)
+                if FLAG_SAVE_FRONT_PANEL_TO_SHOT:
+                    Timer.start_timer("save_front_panel_settings")
+                    
+                    with h5py.File(path,'r+') as hdf5_file:
+                        self.BLACS.front_panel_settings.store_front_panel_in_h5(hdf5_file,states,tab_positions,window_data,plugin_data,save_conn_table=False, save_queue_data=False)
 
-                    data_group = hdf5_file['/'].create_group('data')
-                    # stamp with the run time of the experiment
-                    hdf5_file.attrs['run time'] = time.strftime('%Y%m%dT%H%M%S',run_time)
+                        data_group = hdf5_file['/'].create_group('data')
+                        # stamp with the run time of the experiment
+                        hdf5_file.attrs['run time'] = time.strftime('%Y%m%dT%H%M%S',run_time)
+
+                    Timer.stop_timer("save_front_panel_settings")
         
                 error_condition = False
                 response_list = {}
@@ -867,7 +943,20 @@ class QueueManager(object):
                     for name in stop_groups.pop(min(stop_groups)):
                         tab = devices_in_use[name]
                         try:
-                            tab.transition_to_manual(self.current_queue)
+                            Timer.start_timer(f"transition_to_manual_{name}")
+                            Timer.register_absolute_time(f"transition_to_manual_{name}")
+
+
+                            if FLAG_EFFICIENT_PRAWN_TRANSITION_TO_MANUL and name == PRAWN_NAME:
+                                tab.fake_transition_to_manual(self.current_queue)
+                            elif FLAG_EFFICIENT_EMCCD and name == EMCCD_NAME:
+                                tab.fake_transition_to_manual(self.current_queue,
+                                    operator = self.emccd_transition_to_manual_operator)
+                            elif FLAG_EMCCD_ISS_EFFICIENT and name == EMCCD_ISS_NAME:
+                                tab.fake_transition_to_manual(self.current_queue,
+                                    operator = self.emccd_iss_transition_to_manual_operator)
+                            else:
+                                tab.transition_to_manual(self.current_queue)
                             transition_list[name] = tab
                         except Exception:
                             logger.exception('Exception while transitioning %s to manual mode.'%(name))
@@ -876,9 +965,9 @@ class QueueManager(object):
                     while transition_list:
                         logger.info('Waiting for the following devices to finish transitioning to manual mode: %s'%str(transition_list))
                         try:
-                            name, result = self.current_queue.get(2)
+                            name, result = self.current_queue.get(True, timeout=2)
                             if name == 'Queue Manager' and result == 'abort':
-                                # Ignore any abort signals left in the queue, it is too
+                                # Ignore any abort ignals left in the queue, it is too
                                 # late to abort in any case:
                                 continue
                         except queue.Empty:
@@ -904,6 +993,7 @@ class QueueManager(object):
                             logger.debug('%s finished transitioning to manual mode' % name)
                         # Once device has transitioned_to_manual, disconnect restart
                         # signal:
+                        Timer.stop_timer(f"transition_to_manual_{name}")
                         tab = devices_in_use[name]
                         inmain(tab.disconnect_restart_receiver, restart_function)
                         del transition_list[name]
@@ -941,11 +1031,13 @@ class QueueManager(object):
                 self.prepend(path)
                 
                 continue
-            
+            Timer.stop_timer("transition_to_manual")
+
             ##########################################################################################################################################
             #                                                        Analysis Submission                                                             #
             ########################################################################################################################################## 
             logger.info('All devices are back in static mode.')  
+            Timer.start_timer("lyse_submission")
 
             # check for analysis Filters in Plugins
             send_to_analysis = True
@@ -961,6 +1053,9 @@ class QueueManager(object):
             if send_to_analysis:
                 self.BLACS.analysis_submission.get_queue().put(['file', path])
 
+            Timer.stop_timer("lyse_submission")
+
+            Timer.start_timer("finalization")
             ##########################################################################################################################################
             #                                                        Plugin callbacks                                                                #
             ########################################################################################################################################## 
@@ -995,5 +1090,10 @@ class QueueManager(object):
                     logger.info(message)      
 
             self.set_status("Idle")
+            
+            Timer.stop_timer("finalization")
+
+            Timer.save_and_flush(path, "master")
+
         logger.info('Stopping')
 

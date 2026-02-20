@@ -59,8 +59,7 @@ MODE_BUFFERED = 8
 class StateQueue(object):
     # NOTE:
     #
-    # It is theoretically possible to remove the dependency on the Qt Mainloop (remove inmain decorators and fnuction calls)
-    # by introducing a local lock object instead. However, be aware that right now, the Qt inmain lock is preventing the 
+    # It is theoretically possible to remove the dependency on the Qt Mainloop (remove inmain decorators and fnuction calls)    # by introducing a local lock object instead. However, be aware that right now, the Qt inmain lock is preventing the 
     # statemachine loop (Tab.mainloop) from getting any states uot of the queue until after the entire tab is initialised 
     # and the Qt mainloop starts.
     #
@@ -212,7 +211,7 @@ def define_state(allowed_modes,queue_state_indefinitely,delete_stale_states=Fals
             self.event_queue.put(allowed_modes,queue_state_indefinitely,delete_stale_states,[function,[args,kwargs]])
         f.__name__ = unescaped_name
         f._allowed_modes = allowed_modes
-        return f        
+        return f
     return wrap
     
         
@@ -770,6 +769,8 @@ class Tab(object):
                 # Get the next task from the event queue:
                 logger.debug('Waiting for next event')
                 func, data = event_queue.get(self.mode)
+                if func is None:
+                    continue # If function is None, do nothing.
                 if func == '_quit':
                     # The user has requested a restart:
                     logger.debug('Received quit signal')

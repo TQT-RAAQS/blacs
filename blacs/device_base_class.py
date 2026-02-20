@@ -687,6 +687,32 @@ class DeviceTab(Tab):
             self.program_device()
         else:
             self._last_programmed_values = self.get_front_panel_values()
+
+    def fake_transition_to_manual(self,
+                                  notify_queue,
+                                  program=False,
+                                  operator = None):
+        original_mode = self.mode
+        self.mode = MODE_TRANSITION_TO_MANUAL
+
+        if operator is not None:
+            success = operator()
+        else:
+            success = True
+
+        if success:
+            notify_queue.put([self.device_name,'success'])
+            self.mode = MODE_MANUAL
+        else:
+            notify_queue.put([self.device_name,'fail'])
+            raise Exception('Could not transition to manual. You must restart this device to continue')
+        
+        self.event_queue.put(original_mode,False,False,[None,None]) # Forcing a mode update
+        
+        if program:
+            self.program_device()
+        else:
+            self._last_programmed_values = self.get_front_panel_values()
             
 class DeviceWorker(Worker):
     def init(self):
