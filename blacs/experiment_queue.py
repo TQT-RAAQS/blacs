@@ -43,11 +43,13 @@ from labscript_utils.timer import Timer
 from labscript_utils.flags import (\
     FLAG_SAVE_FRONT_PANEL_TO_SHOT, FLAG_EFFICIENT_PRAWN_TRANSITION_TO_MANUL, PRAWN_NAME,
     FLAG_EFFICIENT_EMCCD, EMCCD_NAME, FLAG_ASYNCHRONOUS_EMCCD,
-    FLAG_EMCCD_ISS_EFFICIENT, EMCCD_ISS_NAME, FLAG_ASYNCHRONOUS_EMCCD_ISS
+    FLAG_EMCCD_ISS_EFFICIENT, EMCCD_ISS_NAME, FLAG_ASYNCHRONOUS_EMCCD_ISS,
+    FLAG_QDAC_EFFICIENT, QDAC_NAME, FLAG_ASYNCHRONOUS_QDAC
 )
 
 from experiment.modules.emccd_server_client import *
 from experiment.modules.emccd_server_client.emccd_fgc_client import EmccdFGCClient
+from experiment.servers.qdac_server.qdacii_client import QDACIIClient
 
 
 def tempfilename(prefix='BLACS-temp-', suffix='.h5'):
@@ -201,8 +203,51 @@ class QueueManager(object):
             def emccd_iss_ttm_async():
                 threading.Thread(target=emccd_iss_ttm, name="EMCCD-iss-ttm", daemon=True).start()
                 return True
+            
+            def emccd_iss_ttb(path):
+                with self._emccd_iss_socket_lock:
+                    self.emccd_iss_client.socket.send_string(path)
+                    self.emccd_iss_client.socket.recv()
+                    self.emccd_iss_client.socket.send_string("")
+                    self.emccd_iss_client.socket.recv()
+
+            def emccd_iss_ttb_async(path):
+                threading.Thread(target=emccd_iss_ttb, args=(path,), name="EMCCD-iss-ttb", daemon=True).start()
+                return True
 
             self.emccd_iss_transition_to_manual_operator = emccd_iss_ttm_async if FLAG_ASYNCHRONOUS_EMCCD_ISS else emccd_iss_ttm
+            self.emccd_iss_transition_to_buffered_operator = emccd_iss_ttb_async if FLAG_ASYNCHRONOUS_EMCCD_ISS else emccd_iss_ttb
+
+        if FLAG_QDAC_EFFICIENT:
+            self.qdac_client = QDACIIClient()
+            self._qdac_socket_lock = threading.Lock()
+
+            def qdac_ttm():
+                with self._qdac_socket_lock:
+                    self.qdac_client.socket.send_string("done")
+                    self.qdac_client.socket.recv()
+                    self.qdac_client.socket.send_string("")
+                    self.qdac_client.socket.recv()
+
+                return True
+            
+            def qdac_ttm_async():
+                threading.Thread(target=qdac_ttm, name="QDAC-ttm", daemon=True).start()
+                return True
+            
+            def qdac_ttb(path):
+                with self._qdac_socket_lock:
+                    self.qdac_client.socket.send_string(path)
+                    self.qdac_client.socket.recv()
+                    self.qdac_client.socket.send_string("")
+                    self.qdac_client.socket.recv()
+
+            def qdac_ttb_async(path):
+                threading.Thread(target=qdac_ttb, args=(path,), name="QDAC-ttb", daemon=True).start()
+                return True
+
+            self.qdac_transition_to_manual_operator = qdac_ttm_async if FLAG_ASYNCHRONOUS_QDAC else qdac_ttm
+            self.qdac_transition_to_buffered_operator = qdac_ttb_async if FLAG_ASYNCHRONOUS_QDAC else qdac_ttb
 
         self.manager = threading.Thread(target = self.manage)
         self.manager.daemon=True
@@ -542,7 +587,15 @@ class QueueManager(object):
         if self.get_device_error_state(name,self.BLACS.tablist):
             return False
         tab.connect_restart_receiver(restart_receiver)
-        tab.transition_to_buffered(h5file,self.current_queue)
+        
+        if FLAG_QDAC_EFFICIENT and name == QDAC_NAME:
+            tab.fake_transition_to_buffered(h5file,self.current_queue,operator=self.qdac_transition_to_buffered_operator)
+        elif FLAG_EMCCD_ISS_EFFICIENT and name == EMCCD_ISS_NAME:
+            tab.fake_transition_to_buffered(h5file,self.current_queue,operator=self.emccd_iss_transition_to_buffered_operator)
+        else:
+            tab.transition_to_buffered(h5file,self.current_queue)
+
+
         transition_list[name] = tab
         return True
     
@@ -955,6 +1008,9 @@ class QueueManager(object):
                             elif FLAG_EMCCD_ISS_EFFICIENT and name == EMCCD_ISS_NAME:
                                 tab.fake_transition_to_manual(self.current_queue,
                                     operator = self.emccd_iss_transition_to_manual_operator)
+                            elif FLAG_QDAC_EFFICIENT and name == QDAC_NAME:
+                                tab.fake_transition_to_manual(self.current_queue,
+                                    operator = self.qdac_transition_to_manual_operator)
                             else:
                                 tab.transition_to_manual(self.current_queue)
                             transition_list[name] = tab

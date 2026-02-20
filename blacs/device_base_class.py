@@ -688,6 +688,31 @@ class DeviceTab(Tab):
         else:
             self._last_programmed_values = self.get_front_panel_values()
 
+    @define_state(MODE_MANUAL,True)
+    def fake_transition_to_buffered(self,h5_file,notify_queue,operator=None):
+        # Get rid of any "remote values changed" dialog
+        original_mode = self.mode
+        self._changed_widget.hide()
+    
+        self.mode = MODE_TRANSITION_TO_BUFFERED
+        
+        h5_file = path_to_agnostic(h5_file)
+        # transition_to_buffered returns the final values of the run, to update the GUI with at the end of the run:
+        if operator is not None:
+            success = operator(h5_file)
+        else:
+            success = True
+
+        self.mode = MODE_BUFFERED
+        
+        if success:
+            notify_queue.put([self.device_name,'success'])
+        else:
+            notify_queue.put([self.device_name,'fail'])
+            raise Exception('Could not transition to buffered. You must restart this device to continue')
+        
+        self.event_queue.put(original_mode,False,False,[None,None]) # Forcing a mode update
+
     def fake_transition_to_manual(self,
                                   notify_queue,
                                   program=False,
