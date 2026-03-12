@@ -40,16 +40,26 @@ from blacs.tab_base_classes import MODE_MANUAL, MODE_TRANSITION_TO_BUFFERED, MOD
 import blacs.plugins as plugins
 
 from labscript_utils.timer import Timer
-from labscript_utils.flags import (\
-    FLAG_SAVE_FRONT_PANEL_TO_SHOT, FLAG_EFFICIENT_PRAWN_TRANSITION_TO_MANUL, PRAWN_NAME,
-    FLAG_EFFICIENT_EMCCD, EMCCD_NAME, FLAG_ASYNCHRONOUS_EMCCD,
-    FLAG_EMCCD_ISS_EFFICIENT, EMCCD_ISS_NAME, FLAG_ASYNCHRONOUS_EMCCD_ISS,
-    FLAG_QDAC_EFFICIENT, QDAC_NAME, FLAG_ASYNCHRONOUS_QDAC
-)
 
 from experiment.modules.emccd_server_client import *
 from experiment.modules.emccd_server_client.emccd_fgc_client import EmccdFGCClient
 from experiment.servers.qdac_server.qdacii_client import QDACIIClient
+
+from experiment.toolkits.configs import LabscriptSettings
+
+FLAG_SAVE_FRONT_PANEL_TO_SHOT = LabscriptSettings.flag_save_front_panel_to_shot
+FLAG_EFFICIENT_PRAWN_TRANSITION_TO_MANUL = LabscriptSettings.flag_efficient_prawn_transition_to_manual
+FLAG_EFFICIENT_EMCCD = LabscriptSettings.flag_efficient_emccd
+FLAG_ASYNCHRONOUS_EMCCD = LabscriptSettings.flag_asynchronous_emccd
+FLAG_EMCCD_ISS_EFFICIENT = LabscriptSettings.flag_emccd_iss_efficient
+FLAG_ASYNCHRONOUS_EMCCD_ISS = LabscriptSettings.flag_asynchronous_emccd_iss
+FLAG_QDAC_EFFICIENT = LabscriptSettings.flag_qdac_efficient
+FLAG_ASYNCHRONOUS_QDAC = LabscriptSettings.flag_asynchronous_qdac
+
+PRAWN_NAME = LabscriptSettings.prawn_name
+EMCCD_NAME = LabscriptSettings.emccd_name
+EMCCD_ISS_NAME = LabscriptSettings.emccd_iss_name
+QDAC_NAME = LabscriptSettings.qdac_name
 
 
 def tempfilename(prefix='BLACS-temp-', suffix='.h5'):
