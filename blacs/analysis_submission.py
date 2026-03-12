@@ -30,13 +30,22 @@ import labscript_utils.shared_drive
 from labscript_utils.qtwidgets.elide_label import elide_label
 from blacs import BLACS_DIR
 
+from experiment.toolkits.configs import LabscriptSettings
+from rydberg_lyse.servers.client import RydbergLyseClient
+
+FLAG_RYDBERG_LYSE = LabscriptSettings.flag_rydberg_lyse
+
 
 class AnalysisSubmission(object):        
     def __init__(self, BLACS, blacs_ui):
         self.inqueue = queue.Queue()
         self.BLACS = BLACS
+
+        if FLAG_RYDBERG_LYSE:
+            self.rydberg_lyse_client = RydbergLyseClient()
+
         self.port = int(self.BLACS.exp_config.get('ports', 'lyse'))
-        
+
         self._ui = UiLoader().load(os.path.join(BLACS_DIR, 'analysis_submission.ui'))
         blacs_ui.analysis.addWidget(self._ui)
         self._ui.frame.setMinimumWidth(blacs_ui.queue_controls_frame.sizeHint().width())
@@ -230,7 +239,12 @@ class AnalysisSubmission(object):
         if host and send_to_server:       
             self.server_online = 'checking'         
             try:
-                response = zmq_get(self.port, host, 'hello', timeout=1)
+                print(self.port, host)
+                if FLAG_RYDBERG_LYSE:
+                    response = self.rydberg_lyse_client.send("hello", 1)
+                else:
+                    response = zmq_get(self.port, host, 'hello', timeout=1)
+                print(response)
                 self.failure_reason = None
             except (TimeoutError, gaierror, AuthenticationFailure) as e:
                 success = False
@@ -255,7 +269,10 @@ class AnalysisSubmission(object):
             data = {'filepath': labscript_utils.shared_drive.path_to_agnostic(path)}
             self.server_online = 'checking'
             try:
-                response = zmq_get(self.port, self.server, data, timeout=1)
+                if FLAG_RYDBERG_LYSE:
+                    response = self.rydberg_lyse_client.send(data['filepath'], 1)
+                else:
+                    response = zmq_get(self.port, self.server, data, timeout=1)
                 self.failure_reason = None
             except (TimeoutError, gaierror, AuthenticationFailure) as e:
                 success = False

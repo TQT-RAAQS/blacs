@@ -62,6 +62,11 @@ from labscript_utils.setup_logging import setup_logging
 import labscript_utils.shared_drive
 import blacs
 
+import psutil
+
+p = psutil.Process(os.getpid())
+p.nice(psutil.HIGH_PRIORITY_CLASS)
+
 
 process_tree = ProcessTree.instance()
 process_tree.zlock_client.set_process_name('BLACS')
